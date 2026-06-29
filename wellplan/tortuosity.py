@@ -21,12 +21,14 @@ import numpy as np
 
 from wellplan.survey import Survey, minimum_curvature
 
-__all__ = ["apply_deviation", "MAX_DLS_TARGET", "DEFAULT_SEED"]
+__all__ = ["apply_deviation", "MAX_DLS_TARGET", "DEFAULT_SEED", "MAX_LATERAL_INC_STEP"]
 
 # DLS (deg/100ft) that level 5 is calibrated to produce.
 MAX_DLS_TARGET = 20.0
 # Fixed RNG seed so a given level is reproducible run-to-run.
 DEFAULT_SEED = 42
+# Max inclination change (deg) allowed between adjacent lateral stations.
+MAX_LATERAL_INC_STEP = 0.5
 
 
 def _max_dls(md: np.ndarray, inc: np.ndarray, azi: np.ndarray) -> float:
@@ -44,11 +46,36 @@ def _deviated(inc, azi, d_inc, d_azi, magnitude):
     return inc_out, azi_out
 
 
+def _limit_inc_step(inc, mask, max_step):
+    """Cap the station-to-station inclination change within ``mask``.
+
+    A forward slew-rate limiter: walking down the hole, any step into a masked
+    station whose magnitude exceeds ``max_step`` is clamped to ``max_step`` (the
+    sign is kept).  This guarantees ``|inc[i] - inc[i-1]| <= max_step`` for every
+    masked station, keeping a deviated lateral from kinking between stations.
+    """
+    if mask is None or max_step is None:
+        return inc
+    mask = np.asarray(mask, dtype=bool)
+    if not mask.any():
+        return inc
+    out = inc.copy()
+    for i in range(1, out.size):
+        if not mask[i]:
+            continue
+        step = out[i] - out[i - 1]
+        if abs(step) > max_step:
+            out[i] = out[i - 1] + np.sign(step) * max_step
+    return out
+
+
 def apply_deviation(
     survey: Survey,
     level: float,
     seed: int = DEFAULT_SEED,
     deviate_mask: np.ndarray | None = None,
+    lateral_mask: np.ndarray | None = None,
+    max_inc_step: float = MAX_LATERAL_INC_STEP,
 ) -> tuple[Survey, dict]:
     """Return ``(deviated_survey, info)`` with tortuosity applied to inc/azi.
 
@@ -64,6 +91,13 @@ def apply_deviation(
     deviate_mask : array of bool, optional
         Per-station mask; stations that are ``False`` are held fixed (e.g. a
         protected vertical section).  ``None`` deviates every station.
+    lateral_mask : array of bool, optional
+        Per-station mask marking the lateral.  Within it the deviated
+        inclination is slew-rate limited so the change between adjacent stations
+        never exceeds ``max_inc_step``.  ``None`` applies no limit.
+    max_inc_step : float
+        Max inclination change (deg) allowed between adjacent ``lateral_mask``
+        stations.  Defaults to :data:`MAX_LATERAL_INC_STEP`.
 
     Returns
     -------
@@ -132,6 +166,7 @@ def apply_deviation(
 
     magnitude = scale * m5
     inc_out, azi_out = _deviated(inc, azi, d_inc, d_azi, magnitude)
+    inc_out = _limit_inc_step(inc_out, lateral_mask, max_inc_step)
     deviated = Survey(md, inc_out, azi_out, surface=survey.surface)
 
     info["magnitude"] = float(magnitude)

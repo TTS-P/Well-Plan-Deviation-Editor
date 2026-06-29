@@ -374,7 +374,10 @@ with st.sidebar:
         seed = int(st.number_input("Seed", 0, 10_000, 42, 1,
                                    help="Same seed reproduces the same wellbore."))
         mask = section_mask(out_base, vertical=dev_vert, build=dev_build, lateral=dev_lat)
-        display, dev_info = apply_deviation(out_base, level, seed=seed, deviate_mask=mask)
+        lat_mask = section_mask(out_base, vertical=False, build=False, lateral=True)
+        display, dev_info = apply_deviation(
+            out_base, level, seed=seed, deviate_mask=mask, lateral_mask=lat_mask
+        )
         if dev_info["warning"]:
             st.warning(dev_info["warning"])
         elif level > 0:
